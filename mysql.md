@@ -240,3 +240,132 @@ docker run -d \
   -v mysql_data:/var/lib/mysql \
   mysql:8.0
 ```
+
+## 安全删除数据操作
+
+### 1. 基本删除语法
+```sql
+-- 使用指定数据库
+USE database_name;
+
+-- 删除符合条件的记录
+DELETE FROM table_name WHERE condition;
+```
+
+### 2. Gogs 数据库删除示例
+```sql
+-- 删除 gogs 数据库中 repository 表 owner_id > 100 的记录
+USE gogs;
+DELETE FROM repository WHERE owner_id > 100;
+```
+
+### 3. 安全删除最佳实践
+
+#### 步骤 1：备份数据
+```bash
+# 备份整个数据库
+mysqldump -u username -p gogs > gogs_backup.sql
+
+# 备份特定表
+mysqldump -u username -p gogs repository > repository_backup.sql
+```
+
+#### 步骤 2：使用事务安全删除
+```sql
+USE gogs;
+START TRANSACTION;
+
+-- 先查看要删除的记录数量
+SELECT COUNT(*) FROM repository WHERE owner_id > 100;
+
+-- 查看具体要删除的记录（可选）
+SELECT id, name, owner_id FROM repository WHERE owner_id > 100 LIMIT 10;
+
+-- 执行删除
+DELETE FROM repository WHERE owner_id > 100;
+
+-- 检查删除后的结果
+SELECT COUNT(*) FROM repository;
+
+-- 如果确认无误，提交事务
+COMMIT;
+
+-- 如果有问题，回滚事务
+-- ROLLBACK;
+```
+
+#### 步骤 3：分批删除（大数据量时推荐）
+```sql
+-- 分批删除，避免长时间锁表
+SET @batch_size = 1000;
+
+REPEAT
+  DELETE FROM repository WHERE owner_id > 100 LIMIT @batch_size;
+UNTIL ROW_COUNT() = 0 END REPEAT;
+```
+
+### 4. 其他实用删除操作
+
+#### 条件删除示例
+```sql
+-- 删除指定时间范围的记录
+DELETE FROM repository 
+WHERE owner_id > 100 
+AND created_unix < UNIX_TIMESTAMP('2023-01-01');
+
+-- 删除多个条件组合
+DELETE FROM repository 
+WHERE owner_id > 100 
+AND is_private = 1 
+AND is_fork = 1;
+```
+
+#### 关联删除
+```sql
+-- 删除没有对应用户的仓库记录
+DELETE r FROM repository r
+LEFT JOIN user u ON r.owner_id = u.id
+WHERE u.id IS NULL;
+```
+
+### 5. 删除操作注意事项
+
+#### 重要警告
+- ⚠️ **DELETE 操作不可逆**，删除后无法恢复
+- ⚠️ **务必先备份**重要数据
+- ⚠️ **先在测试环境验证**删除逻辑
+- ⚠️ **使用事务**确保可以回滚
+
+#### 性能优化
+```sql
+-- 查看执行计划
+EXPLAIN DELETE FROM repository WHERE owner_id > 100;
+
+-- 确保相关字段有索引
+SHOW INDEX FROM repository;
+
+-- 如果没有索引，建议添加
+CREATE INDEX idx_owner_id ON repository(owner_id);
+```
+
+#### 监控删除进度
+```sql
+-- 删除前记录总数
+SELECT COUNT(*) as total_before FROM repository;
+
+-- 删除过程中检查剩余数量
+SELECT COUNT(*) as remaining FROM repository WHERE owner_id > 100;
+
+-- 删除后确认结果
+SELECT COUNT(*) as total_after FROM repository;
+```
+
+### 6. 数据恢复
+如果误删了数据，可以从备份恢复：
+```bash
+# 从备份文件恢复
+mysql -u username -p gogs < gogs_backup.sql
+
+# 或恢复特定表
+mysql -u username -p gogs < repository_backup.sql
+```
